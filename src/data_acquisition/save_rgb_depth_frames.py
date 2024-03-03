@@ -2,7 +2,7 @@
 script to save RGB and depth data from intel realsense d455 camera into a specific folder
 
 inputs:
-    output_dir (input desired folder location to save data) -> string
+    output_dir (path to folder to save data) -> string
     img_width (width of the image to be recorded by realsense camera) -> int
     img_height (height of the image to be recorded by realsense camera) -> int
     fps (frames per second to be recorded by realsense camera) -> int
@@ -13,12 +13,9 @@ outputs:
 usage:
     connect realsense camera via USB
     modify inputs
-    run script using 'python get_frames.py'
-    press 'r' on the keyboard to start recording
-    press 's' on the keyboard to stop recording
-
-author: Saifullah Ijaz
-date: 23/02/2024
+    run script using 'python save_rgb_depth_frames.py'
+    frames will start being saved in output_dir automatically
+    press 'ctrl + c' on the keyboard to stop recording
 
 Copyright (C) 2024  Saifullah Ijaz
 
@@ -34,6 +31,9 @@ Copyright (C) 2024  Saifullah Ijaz
 
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+author: Saifullah Ijaz
+date: 23/02/2024
 """
 
 from imports import *
