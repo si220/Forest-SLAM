@@ -14,8 +14,8 @@ usage:
     connect realsense camera via USB
     modify inputs
     run script using 'python save_rgb_depth_frames.py'
-    press 'r' on the keyboard to start recording
-    press 's' on the keyboard to stop recording
+    frames will start being saved in output_dir automatically
+    press 'ctrl + c' on the keyboard to stop recording
 
 Copyright (C) 2024  Saifullah Ijaz
 
