@@ -1,8 +1,9 @@
 """
 Perform pose estimations using SuperGlue feature correspondences
 
-Localisation.match_features() contains code from SuperGluePretrainedNetwork/match_pairs.py
+Localisation.match_frames() contains code from SuperGluePretrainedNetwork/match_pairs.py
 to match SuperPoint features in pairs of rgb frames using SuperGlue
+Magic Leap, Inc. remains the owner of that code
 See SuperGluePretrainedNetwork for original authors implementation
 
 Localisation.get_camera_intrinsics() loads the camera intrinsic parameters from a yaml file
@@ -62,7 +63,7 @@ from SuperGluePretrainedNetwork.models.utils import (compute_pose_error, compute
 
 # inputs
 input_dir = 'C:/Users/saifu/source/repos/Forest-SLAM/forest_data/1018_dalsa_garden_short/1018_garden_short_imgs/00/c54d7a_png'
-output_dir = 'C:/Users/saifu/source/repos/Forest-SLAM/forest_data/1018_dalsa_garden_short/1018_garden_short_imgs/00/c54d7a_feature_correspondences'
+output_dir = 'C:/Users/saifu/source/repos/Forest-SLAM/forest_data/1018_dalsa_garden_short/1018_garden_short_imgs/00/c54d7a_trajectory'
 cam_intrinsic_params = 'C:/Users/saifu/source/repos/Forest-SLAM/src/dalsa_rgb0.yaml'
 
 # see SuperGluePretrainedNetwork/match_pairs.py to understand hyperparams
@@ -221,6 +222,10 @@ class Localisation:
         # create a point cloud from the trajectory
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(trajectory)
+
+        # create output folder if it does not exist
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
 
         # save the point cloud in output_dir
         o3d.io.write_point_cloud(os.path.join(self.output_dir, "1018-00-trajectory.pcd"), pcd)
