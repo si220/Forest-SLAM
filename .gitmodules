@@ -1,3 +1,6 @@
 [submodule "ros_ws/src/SuperGluePretrainedNetwork"]
 	path = ros_ws/src/SuperGluePretrainedNetwork
 	url = https://github.com/magicleap/SuperGluePretrainedNetwork.git
+[submodule "ros_ws/src/ORB_SLAM3"]
+	path = ros_ws/src/ORB_SLAM3
+	url = https://github.com/si220/ORB_SLAM3.git
