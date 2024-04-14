@@ -1,3 +1,35 @@
+"""
+Save ground truth relative poses and images to use with SuperGlue
+
+inputs:
+    bagfile (path to BotanicGarden bagfile containing data) -> string
+    img_folder (path to folder to store images to be used by SuperGlue) -> string
+    pose_txt_file (path to folder to store relative poses to be used by SuperGlue) -> string
+    SuperGlue_matches (path to folder to store results from SuperGlue matching) -> string
+
+outputs:
+    folder containing greyscale images to be used by SuperGlue
+    txt file containing list of image pairs and relative poses
+
+Copyright (C) 2024  Saifullah Ijaz
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+author: Saifullah Ijaz
+date: 09/04/2024
+"""
+
 import cv2
 import numpy as np
 import os
@@ -7,13 +39,16 @@ import sensor_msgs.point_cloud2 as pc2
 import tf.transformations as tf_trans
 from cv_bridge import CvBridge
 
-bag = rosbag.Bag('Datasets/BotanicGarden/1018_13_img10hz600p.bag')
-bridge = CvBridge()
+# path to bagfile
+bagfile = 'Datasets/BotanicGarden/1008_03_img10hz600p.bag'
 
 # path to store outputs
-img_folder = 'Datasets/BotanicGarden/1018_13/greyscale_imgs/'
-pose_txt_file = 'Datasets/BotanicGarden/1018_13/poses.txt'
-SuperGlue_matches = 'Datasets/BotanicGarden/1018_13/SuperGlue_matches_tuned/'
+img_folder = 'Datasets/BotanicGarden/1008_03/greyscale_imgs/'
+pose_txt_file = 'Datasets/BotanicGarden/1008_03/poses.txt'
+SuperGlue_matches = 'Datasets/BotanicGarden/1008_03/SuperGlue_matches/'
+
+bag = rosbag.Bag(bagfile)
+bridge = CvBridge()
 
 # delete the old folder if it exists
 if os.path.exists(img_folder):
@@ -132,9 +167,3 @@ for timestamp_image in timestamps_images:
 
     # increment the image counter
     i += 1
-
-# python3 match_pairs.py --input_pairs ~/ros_ws/src/Datasets/BotanicGarden/poses.txt --input_dir ~/ros_ws/src/Datasets/BotanicGarden/greyscale_imgs/ --output_dir ~/ros_ws/src/Datasets/BotanicGarden/SuperGlue_matches/ --eval --viz --show_keypoints --superglue outdoor
-# python3 match_pairs.py --input_pairs ~/ros_ws/src/Datasets/BotanicGarden/poses.txt --input_dir ~/ros_ws/src/Datasets/BotanicGarden/greyscale_imgs/ --output_dir ~/ros_ws/src/Datasets/BotanicGarden/SuperGlue_matches_tuned/ --eval --viz --show_keypoints --resize 1600 --superglue outdoor --max_keypoints 2048 --nms_radius 3 --resize_float
-
-# python3 match_pairs.py --input_pairs ~/ros_ws/src/Datasets/BotanicGarden/1018_13/poses.txt --input_dir ~/ros_ws/src/Datasets/BotanicGarden/1018_13/greyscale_imgs/ --output_dir ~/ros_ws/src/Datasets/BotanicGarden/1018_13/SuperGlue_matches/ --eval --viz --show_keypoints --superglue outdoor
-# python3 match_pairs.py --input_pairs ~/ros_ws/src/Datasets/BotanicGarden/1018_13/poses.txt --input_dir ~/ros_ws/src/Datasets/BotanicGarden/1018_13/greyscale_imgs/ --output_dir ~/ros_ws/src/Datasets/BotanicGarden/1018_13/SuperGlue_matches_tuned/ --eval --viz --show_keypoints --resize 1600 --superglue outdoor --max_keypoints 2048 --nms_radius 3 --resize_float
