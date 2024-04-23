@@ -80,6 +80,7 @@ RUN apt-get install -y \
 RUN pip3 install torch torchvision torchaudio
 RUN pip3 install scipy
 RUN pip3 install matplotlib
+RUN pip3 install open3d
 
 ENV ROS_DISTRO noetic
 ENV LANG en_US.UTF-8
