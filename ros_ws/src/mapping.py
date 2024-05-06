@@ -1,22 +1,29 @@
 import rosbag
 import rospy
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import PointCloud2, PointField
 import sensor_msgs.point_cloud2 as pc2
 import open3d as o3d
 import numpy as np
 import tf.transformations as tf_trans
 from std_msgs.msg import Header
+from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Path
 
 rospy.init_node('slam_publisher')
-pub = rospy.Publisher('slam_map', PointCloud2, queue_size=10)
+map_pub = rospy.Publisher('slam_map', PointCloud2, queue_size=10)
+path_pub = rospy.Publisher('trajectory', Path, queue_size=10)
 
-bag = rosbag.Bag('Datasets/BotanicGarden/1005_00_img10hz600p.bag')
+bag = rosbag.Bag('Datasets/BotanicGarden/1018_13_img10hz600p.bag')
 
 # initialise an empty point cloud
 pcd = o3d.geometry.PointCloud()
 
 # create a dictionary to store the ground truth poses
 gt_poses = {}
+
+# initialise an empty Path message
+path = Path()
+path.header.frame_id = 'map'
 
 # loop through ground truth poses in rosbag
 for topic, msg, t in bag.read_messages(topics=['/gt_poses']):
@@ -76,7 +83,18 @@ for index, (topic, msg, t) in enumerate(bag.read_messages(topics=['/velodyne_poi
         pc2_msg = pc2.create_cloud_xyz32(header, np.asarray(pcd.points))
 
         # publish the point cloud message
-        pub.publish(pc2_msg)
+        map_pub.publish(pc2_msg)
         print(f'map updated')
+
+        # add the pose to the path
+        pose_stamped = PoseStamped()
+        pose_stamped.header.stamp = rospy.Time.from_sec(t.to_sec())
+        pose_stamped.header.frame_id = 'map'
+        pose_stamped.pose = pose
+        path.poses.append(pose_stamped)
+
+        # publish the path message
+        path_pub.publish(path)
+        print(f'path updated')
     
 print(f'map completed')
