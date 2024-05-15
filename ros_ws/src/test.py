@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import rosbag
 import rospy
@@ -50,17 +51,18 @@ rotation_losses_epoch = []
 total_losses_epoch = []
 
 class PoseEstimationModel(nn.Module):
-    def __init__(self, input_dim, num_heads, num_layers, hidden_dim, translation_output_dim, rotation_output_dim):
+    def __init__(self, input_dim, num_heads, num_layers, hidden_dim, translation_output_dim, rotation_output_dim, dropout_prob):
         super(PoseEstimationModel, self).__init__()
         self.embedding_layer = nn.Linear(input_dim + 1, hidden_dim)
         self.transformer_encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads), num_layers=num_layers)
-        self.fc_translation = nn.Linear(hidden_dim, hidden_dim)
-        self.fc_rotation = nn.Linear(hidden_dim, hidden_dim)
-        self.fc_out_translation = nn.Linear(hidden_dim, translation_output_dim)
-        self.fc_out_rotation = nn.Linear(hidden_dim, rotation_output_dim)
+        self.fc_translation = nn.Linear(hidden_dim, 2 * hidden_dim)  # Increased output dimension
+        self.fc_rotation = nn.Linear(hidden_dim, 2 * hidden_dim)     # Increased output dimension
+        self.fc_out_translation = nn.Linear(2 * hidden_dim, translation_output_dim)  # Adjusted output dimension
+        self.fc_out_rotation = nn.Linear(2 * hidden_dim, rotation_output_dim)        # Adjusted output dimension
         self.attention = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads)
+        self.dropout = nn.Dropout(p=dropout_prob)
 
-        # initialise weights using Xavier initialisation
+        # Xavier initialisation
         nn.init.xavier_uniform_(self.embedding_layer.weight)
         nn.init.xavier_uniform_(self.fc_translation.weight)
         nn.init.xavier_uniform_(self.fc_rotation.weight)
@@ -71,36 +73,43 @@ class PoseEstimationModel(nn.Module):
         # matches: (num_keypoints, 2)
         # confidence: (num_keypoints)
 
-        # concatenate matches and confidence along the last dimension
+        # Concatenate matches and confidence along the last dimension
         inputs = torch.cat((matches, confidence.unsqueeze(-1)), dim=-1)
 
-        # apply linear layer to project inputs to hidden dimension
+        # Apply linear layer to project inputs to hidden dimension
         embeddings = self.embedding_layer(inputs)
 
-        # relu activation
+        # ReLU activation
         embeddings = torch.relu(embeddings)
 
-        # attention
+        # Attention
         attention_output, _ = self.attention(embeddings.float(), embeddings.float(), embeddings.float())
 
-        # transformer encoder
+        # Transformer encoder
         output = self.transformer_encoder(attention_output)
 
-        # translation head
+        # Translation head
         translation = self.fc_translation(output.squeeze())
 
-        # relu activation
+        # ReLU activation
         translation = torch.relu(translation)
 
-        # rotation head
+        # Rotation head
         rotation = self.fc_rotation(output.squeeze())
 
-        # relu activation
+        # ReLU activation
         rotation = torch.relu(rotation)
 
-        # output heads
+        # Apply dropout
+        translation = self.dropout(translation)
+        rotation = self.dropout(rotation)
+
+        # Output heads
         translation_out = self.fc_out_translation(translation)
         rotation_out = self.fc_out_rotation(rotation)
+
+        # Normalize quaternion predictions using L2 norm
+        rotation_out = F.normalize(rotation_out, p=2, dim=-1)
 
         return translation_out, rotation_out
     
@@ -111,10 +120,11 @@ num_layers = 6   # number of transformer layers
 hidden_dim = 1024   # dimensionality of the hidden layer
 translation_output_dim = 3 # dimensionality of translation output
 rotation_output_dim = 4 # dimensionality of rotation output
+dropout_prob = 0.1 # probability of dropping out random neuron
 
-model = PoseEstimationModel(input_dim, num_heads, num_layers, hidden_dim, translation_output_dim, rotation_output_dim)
+model = PoseEstimationModel(input_dim, num_heads, num_layers, hidden_dim, translation_output_dim, rotation_output_dim, dropout_prob)
 # load the trained weights
-model_path = os.path.join(result_dir, 'pose_estimation_model.pth')
+model_path = os.path.join(result_dir, 'pose_estimation_model_50_epochs.pth')
 model.load_state_dict(torch.load(model_path))
 
 # move model to device and set to evaluation mode
@@ -122,7 +132,7 @@ model.to(device)
 model.eval()
 
 # define loss function
-criterion = nn.MSELoss()
+criterion = nn.SmoothL1Loss()  # Huber Loss
 
 num_epochs = 1
     
@@ -174,6 +184,10 @@ for epoch in range(num_epochs):
     prev_pose = None
     prev_tf_mat = None
 
+    # initialise cumulative transformation matrices
+    cumulative_gt_tf_mat = np.eye(4)
+    cumulative_est_tf_mat = np.eye(4)
+
     # loop through image data in rosbag
     for index, (topic, msg, t) in enumerate(bag.read_messages(topics=['/dalsa_rgb/left/image_raw'])):
         # exit on ctrl + c
@@ -192,7 +206,7 @@ for epoch in range(num_epochs):
         cur_tf_mat[0:3, 3] = [cur_pose.position.x, cur_pose.position.y, cur_pose.position.z]
 
         # if this is the first image or the time difference is greater than or equal to 1s
-        if prev_t is None or t.to_sec() - prev_t.to_sec() >= 1:
+        if prev_t is None or t.to_sec() - prev_t.to_sec() >= 0.5:
             if prev_img is not None and prev_tf_mat is not None:
                 # perform the matching
                 pred = feature_matcher({'image0': prev_img, 'image1': cur_img})
@@ -212,9 +226,10 @@ for epoch in range(num_epochs):
                 mconf_tensor = torch.from_numpy(mconf).float().to(device)
 
                 # calculate the ground truth relative translation and rotation
-                relative_tf_mat = np.dot(np.linalg.inv(prev_tf_mat), cur_tf_mat)
-                translation_gt = relative_tf_mat[0:3, 3]
-                rotation_gt = tf_trans.quaternion_from_matrix(relative_tf_mat)
+                relative_gt_tf_mat = np.dot(np.linalg.inv(prev_tf_mat), cur_tf_mat)
+                cumulative_gt_tf_mat = np.dot(cumulative_gt_tf_mat, relative_gt_tf_mat)
+                translation_gt = relative_gt_tf_mat[0:3, 3]
+                rotation_gt = tf_trans.quaternion_from_matrix(relative_gt_tf_mat)
 
                 # convert np arrays to tensors and move to device
                 translation_gt = torch.from_numpy(translation_gt).float().to(device)
@@ -239,49 +254,55 @@ for epoch in range(num_epochs):
                 translation_pred = translation_pred.cpu().numpy()
                 rotation_pred = rotation_pred.cpu().numpy()
 
-                # normalise rotation quaternion to ensure it is valid
-                norm = np.linalg.norm(rotation_pred)
-                rotation_pred /= norm
+                # calculate the estimated relative translation and rotation
+                relative_est_tf_mat = tf_trans.quaternion_matrix(rotation_pred)
+                relative_est_tf_mat[0:3, 3] = translation_pred
+                cumulative_est_tf_mat = np.dot(cumulative_est_tf_mat, relative_est_tf_mat)
 
-                # print(f' loss_translation = {loss_translation.item()}')
-                # print(f' loss_rotation = {loss_rotation.item()}')
-                # print(f' loss = {loss.item()} \n')
+                print(f' loss_translation = {loss_translation.item()}')
+                print(f' loss_rotation = {loss_rotation.item()}')
+                print(f' loss = {loss.item()} \n')
 
-                # print(f'translation_pred = {translation_pred}')
-                # print(f'translation_gt = {translation_gt}')
-                # print(f'rotation_pred = {rotation_pred}')
-                # print(f'rotation_gt = {rotation_gt} \n')
+                print(f'translation_pred = {translation_pred}')
+                print(f'translation_gt = {translation_gt}')
+                print(f'rotation_pred = {rotation_pred}')
+                print(f'rotation_gt = {rotation_gt} \n')
 
                 # add the ground truth pose to the ground truth path
                 gt_pose_stamped = PoseStamped()
-                gt_pose_stamped.header.stamp = rospy.Time.from_sec(prev_t.to_sec())
+                gt_pose_stamped.header.stamp = rospy.Time.from_sec(t.to_sec())
                 gt_pose_stamped.header.frame_id = 'map'
-                gt_pose_stamped.pose = prev_pose
+                gt_pose_stamped.pose.position.x = cumulative_gt_tf_mat[0, 3]
+                gt_pose_stamped.pose.position.y = cumulative_gt_tf_mat[1, 3]
+                gt_pose_stamped.pose.position.z = cumulative_gt_tf_mat[2, 3]
+                gt_quat_array = tf_trans.quaternion_from_matrix(cumulative_gt_tf_mat)
+                gt_pose_stamped.pose.orientation.x = gt_quat_array[0]
+                gt_pose_stamped.pose.orientation.y = gt_quat_array[1]
+                gt_pose_stamped.pose.orientation.z = gt_quat_array[2]
+                gt_pose_stamped.pose.orientation.w = gt_quat_array[3]
                 gt_path.poses.append(gt_pose_stamped)
 
                 # publish the ground truth path message
                 gt_path_pub.publish(gt_path)
-                # print(f'ground truth path updated')
+                # print(f'gt_pose_stamped = {gt_pose_stamped} \n')
 
                 # add the estimated pose to the estimated path
                 est_pose_stamped = PoseStamped()
                 est_pose_stamped.header.stamp = rospy.Time.from_sec(t.to_sec())
                 est_pose_stamped.header.frame_id = 'map'
-                est_pose_stamped.pose.position.x = translation_pred[0]
-                est_pose_stamped.pose.position.y = translation_pred[1]
-                est_pose_stamped.pose.position.z = translation_pred[2]
-                est_pose_stamped.pose.orientation.x = rotation_pred[0]
-                est_pose_stamped.pose.orientation.y = rotation_pred[1]
-                est_pose_stamped.pose.orientation.z = rotation_pred[2]
-                est_pose_stamped.pose.orientation.w = rotation_pred[3]
+                est_pose_stamped.pose.position.x = cumulative_est_tf_mat[0, 3]
+                est_pose_stamped.pose.position.y = cumulative_est_tf_mat[1, 3]
+                est_pose_stamped.pose.position.z = cumulative_est_tf_mat[2, 3]
+                est_quat_array = tf_trans.quaternion_from_matrix(cumulative_est_tf_mat)
+                est_pose_stamped.pose.orientation.x = est_quat_array[0]
+                est_pose_stamped.pose.orientation.y = est_quat_array[1]
+                est_pose_stamped.pose.orientation.z = est_quat_array[2]
+                est_pose_stamped.pose.orientation.w = est_quat_array[3]
                 est_path.poses.append(est_pose_stamped)
 
                 # publish the estimated path message
                 est_path_pub.publish(est_path)
-                # print(f'estimated path updated')
-
-                print(f'gt_pose_stamped = {gt_pose_stamped}')
-                print(f'est_pose_stamped = {est_pose_stamped}')
+                # print(f'est_pose_stamped = {est_pose_stamped}')
 
             # update the previous image, timestamp and pose
             prev_img = cur_img
