@@ -1,28 +1,57 @@
-import matplotlib
-import os
-import numpy as np
-import cv2
 import torch
-import torch.nn as nn
-import matplotlib.pyplot as plt
+import rosbag
+import rospy
+from std_msgs.msg import Header
+from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Path
+from cv_bridge import CvBridge
+import tf.transformations as tf_trans
+import cv2
+import numpy as np
+import os
 from SuperGluePretrainedNetwork.models.matching import Matching
-from SuperGluePretrainedNetwork.models.utils import estimate_pose
-matplotlib.use('TkAgg')
 
-# input dir
-image_dir = 'Datasets/BotanicGarden/1018_dalsa_garden_short/1018_garden_short_imgs/00/c54d7a_png/'
-
-# use GPU if available
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f'device = {device}')
 
-# disable gradient calculations for faster inference
+# disable gradient calculations as not needed for inference
 torch.set_grad_enabled(False)
+
+bridge = CvBridge()
+
+# initialise ros publisher
+rospy.init_node('path_publisher')
+gt_path_pub = rospy.Publisher('gt_trajectory', Path, queue_size=10)
+est_path_pub = rospy.Publisher('est_trajectory', Path, queue_size=10)
+
+# initialise an empty ground truth path message
+gt_path = Path()
+gt_path.header.frame_id = 'map'
+
+# initialise an empty estimated path message
+est_path = Path()
+est_path.header.frame_id = 'map'
+
+bag = rosbag.Bag('Datasets/BotanicGarden/1018_13_img10hz600p.bag')
 
 # camera intrinsic params from the given projection parameters
 K0 = K1 = np.array([[642.9165664800531, 0., 460.1840658156501],
                     [0., 641.9171825800378, 308.5846449100310],
                     [0., 0., 1.]])
+
+# distortion params
+k1 = -0.060164620903866
+k2 = 0.094005180631043
+p1 = 0.0
+p2 = 0.0
+
+dist_coeffs = np.array([k1, k2, p1, p2, 0])
+
+# extrinsic params for the transformation from RGB0 to VLP16 coordinate frame
+T_rgb0_vlp16 = np.array([[0.0238743541600432, -0.999707744440396, 0.00360642510766516, 0.138922870923538],
+                          [-0.00736968896588375, -0.00378431903190059, -0.999965147452649, -0.177101909101325],
+                          [0.999687515506770, 0.0238486947027063, -0.00745791352160211, -0.126685267545513],
+                          [0.0, 0.0, 0.0, 1.0]])
 
 # SuperPoint and SuperGlue hyperparams
 model_config = {
@@ -39,121 +68,187 @@ model_config = {
 }
 
 # initialise SuperPoint and SuperGlue
-network = Matching(model_config).eval().to(device)
+feature_matcher = Matching(model_config).eval().to(device)
 
-# list of image file names
-image_files = sorted([f for f in os.listdir(image_dir) if f.endswith('.png')])
+# create a dictionary to store the ground truth poses
+gt_poses = {}
 
-# create a 2D plot
-fig, ax = plt.subplots()
+# loop through ground truth poses in rosbag
+for topic, msg, t in bag.read_messages(topics=['/gt_poses']):
+    gt_poses[t.to_sec()] = msg.pose
 
-# use interactive mode
-plt.ion()
-plt.show()
+# function to find current pose based on closest timestamp
+def find_closest_timestamp(target, timestamp_dict):
+    # get the list of timestamps
+    timestamps = np.array(list(timestamp_dict.keys()))
 
-# initialise list to store poses
-poses = []
+    # find the index of the closest timestamp
+    idx = np.argmin(np.abs(timestamps - target))
 
-# image dimensions for resizing images
-img_dims = (960, 600)
+    # return the pose corresponding to the closest timestamp
+    return timestamp_dict[timestamps[idx]]
 
-# distortion coefficients
-# k1, k2, p1, p2
-dist_coeffs = np.array([-0.060164620903866, 0.094005180631043, 0, 0])
+# reflection matrices for XY, YZ, and XZ planes
+reflection_matrix_xy = np.array([
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, -1, 0],
+    [0, 0, 0, 1]
+])
 
-# function to create a 4x4 transformation matrix from rotation and translation
-def create_transformation_matrix(R, t):
-    transformation_matrix = np.eye(4)
-    transformation_matrix[:3, :3] = R
-    transformation_matrix[:3, 3] = t
-    return transformation_matrix
+reflection_matrix_yz = np.array([
+    [-1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+])
 
-# function to chain relative poses and create a trajectory
-def create_trajectory(relative_poses):
-    # initialise trajectory with a 4x4 identity matrix
-    trajectory = [np.eye(4)]
+reflection_matrix_xz = np.array([
+    [1, 0, 0, 0],
+    [0, -1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+])
 
-    # chain the relative poses
-    for pose_tuple in relative_poses:
-        if pose_tuple is not None:
-            R, t, inliers = pose_tuple
-            transformation_matrix = create_transformation_matrix(R, t)
-            trajectory.append(trajectory[-1] @ transformation_matrix)
+# 90-degree rotation matrices
+rotation_matrix_x = np.array([
+    [1, 0, 0, 0],
+    [0, 0, -1, 0],
+    [0, 1, 0, 0],
+    [0, 0, 0, 1]
+])
 
-    return trajectory
+rotation_matrix_y = np.array([
+    [0, 0, 1, 0],
+    [0, 1, 0, 0],
+    [-1, 0, 0, 0],
+    [0, 0, 0, 1]
+])
 
-# function to extract positions from 4x4 transformation matrices
-def extract_pos(trajectory):
-    positions = np.array([pose[:3, 3] for pose in trajectory])
-    return positions
+rotation_matrix_z = np.array([
+    [0, -1, 0, 0],
+    [1, 0, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+])
 
-# iterate over pairs of images
-for i in range(len(image_files) - 1):
-    print(i)
+rotation_matrix_neg_z = np.array([
+    [0, 1, 0, 0],
+    [-1, 0, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+])
 
-    # path to images
-    img0_path = os.path.join(image_dir, image_files[i])
-    img1_path = os.path.join(image_dir, image_files[i + 1])
+# initialise previous image, timestamp, ground truth pose and transformation matrix
+prev_img = None
+prev_tf_mat = None
+prev_translation = None
 
-    # load images
-    img0 = cv2.imread(img0_path, cv2.IMREAD_GRAYSCALE)
-    img1 = cv2.imread(img1_path, cv2.IMREAD_GRAYSCALE)
+# initialise cumulative transformation matrices
+cumulative_gt_tf_mat = np.eye(4)
+cumulative_est_tf_mat = np.eye(4)
 
-    # resize images
-    img0 = cv2.resize(img0, img_dims)
-    img1 = cv2.resize(img1, img_dims)
+# loop through image data in rosbag
+for index, (topic, msg, t) in enumerate(bag.read_messages(topics=['/dalsa_rgb/left/image_raw'])):
+    # exit on ctrl + c
+    if rospy.is_shutdown():
+        break
 
-    # undistort images
-    img0 = cv2.undistort(img0, K0, dist_coeffs)
-    img1 = cv2.undistort(img1, K0, dist_coeffs)
+    # convert the image to greyscale and normalise it
+    cur_img = bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+    cur_img = cv2.undistort(cur_img, K0, dist_coeffs)
+    cur_img = cv2.cvtColor(cur_img, cv2.COLOR_BGR2GRAY)
+    cur_img = torch.from_numpy(cur_img/255.).float()[None, None].to(device)
 
-    # convert to tensors
-    img0 = torch.from_numpy(img0/255.).float()[None, None].to(device)
-    img1 = torch.from_numpy(img1/255.).float()[None, None].to(device)
+    # get the corresponding ground truth pose
+    cur_pose = find_closest_timestamp(t.to_sec(), gt_poses)
+    cur_quat = [cur_pose.orientation.x, cur_pose.orientation.y, cur_pose.orientation.z, cur_pose.orientation.w]
+    cur_translation = [cur_pose.position.x, cur_pose.position.y, cur_pose.position.z]
+    cur_tf_mat = tf_trans.quaternion_matrix(cur_quat)
+    cur_tf_mat[0:3, 3] = cur_translation
+    cur_tf_mat = np.dot(T_rgb0_vlp16, cur_tf_mat)
 
-    # perform forward pass to get predictions
-    model_pred = network({'image0': img0, 'image1': img1})
-    model_pred = {j: k[0].cpu().numpy() for j, k in model_pred.items()}
+    if prev_img is not None and prev_tf_mat is not None:
+        # perform the matching
+        pred = feature_matcher({'image0': prev_img, 'image1': cur_img})
+        pred = {k: v[0].detach().cpu().numpy() for k, v in pred.items()}
+        kpts0, kpts1 = pred['keypoints0'], pred['keypoints1']
+        matches, conf = pred['matches0'], pred['matching_scores0']
+        
+        # only keep the matched keypoints
+        valid = matches > -1
+        mkpts0 = kpts0[valid]
+        mkpts1 = kpts1[matches[valid]]
 
-    # get SuperPoint keypoints
-    keypoints_0, keypoints_1 = model_pred['keypoints0'], model_pred['keypoints1']
+        # calculate the ground truth relative translation and rotation
+        relative_gt_tf_mat = np.dot(np.linalg.inv(prev_tf_mat), cur_tf_mat)
+        cumulative_gt_tf_mat = np.dot(cumulative_gt_tf_mat, relative_gt_tf_mat)
 
-    # get number of matches and match confidence from SuperGlue
-    num_matches, match_confidence = model_pred['matches0'], model_pred['matching_scores0']
+        # calculate the estimated relative translation and rotation
+        E, mask = cv2.findEssentialMat(mkpts0, mkpts1, focal=K0[0,0], pp=(K0[0,2], K0[1,2]), method=cv2.RANSAC, prob=0.999, threshold=1.0)
+        _, rotation, translation, _ = cv2.recoverPose(E, mkpts0, mkpts1, focal=K0[0,0], pp=(K0[0,2], K0[1,2]))
+        scale = np.sqrt((cur_translation[0] - prev_translation[0])**2 +
+                        (cur_translation[1] - prev_translation[1])**2 +
+                        (cur_translation[2] - prev_translation[2])**2)
+        translation *= scale
+        translation = translation.reshape(3)
 
-    # only keep features that have been matched
-    valid = num_matches > -1
-    matched_keypoints_0 = keypoints_0[valid]
-    matched_keypoints_1 = keypoints_1[num_matches[valid]]
+        # Apply the reflection transformation to the translation and rotation
+        combined_rotation_matrix = np.dot(reflection_matrix_xy, rotation_matrix_x)
+        combined_rotation_matrix = np.dot(rotation_matrix_neg_z, combined_rotation_matrix)
+        corrected_translation = combined_rotation_matrix[:3, :3].dot(translation)
+        corrected_rotation = combined_rotation_matrix[:3, :3].dot(rotation).dot(combined_rotation_matrix[:3, :3].T)
 
-    # estimate relative pose
-    relative_pose = estimate_pose(matched_keypoints_0, matched_keypoints_1, K0, K1, 1.)
+        relative_est_tf_mat = np.eye(4)
+        relative_est_tf_mat[:3, 3] = corrected_translation
+        relative_est_tf_mat[:3, :3] = corrected_rotation
+        cumulative_est_tf_mat = np.dot(cumulative_est_tf_mat, relative_est_tf_mat)
 
-    # add to poses list if a valid pose was estimated
-    if relative_pose is not None:
-        poses.append(relative_pose)
+        # print(f'est_rotation = {rotation}')
+        # print(f'gt_rotation = {relative_gt_tf_mat[:3, :3]} \n')
+        # print(f'Adjusted est_translation = {translation}')
+        # print(f'gt_translation = {relative_gt_tf_mat[:3, 3]} \n')
 
-        # create the trajectory
-        trajectory = create_trajectory(poses)
+        # print(f'relative_est_tf_mat = {relative_est_tf_mat}')
+        # print(f'relative_gt_tf_mat = {relative_gt_tf_mat} \n')
+        print(f'cumulative_est_tf_mat = {cumulative_est_tf_mat}')
+        print(f'cumulative_gt_tf_mat = {cumulative_gt_tf_mat} \n')
 
-        # extract positions from the trajectory
-        estimated_pos = extract_pos(trajectory)
+        # add the ground truth pose to the ground truth path
+        gt_pose_stamped = PoseStamped()
+        gt_pose_stamped.header.stamp = rospy.Time.from_sec(t.to_sec())
+        gt_pose_stamped.header.frame_id = 'map'
+        gt_pose_stamped.pose.position.x = cumulative_gt_tf_mat[0, 3]
+        gt_pose_stamped.pose.position.y = cumulative_gt_tf_mat[1, 3]
+        gt_pose_stamped.pose.position.z = cumulative_gt_tf_mat[2, 3]
+        gt_quat_array = tf_trans.quaternion_from_matrix(cumulative_gt_tf_mat)
+        gt_pose_stamped.pose.orientation.x = gt_quat_array[0]
+        gt_pose_stamped.pose.orientation.y = gt_quat_array[1]
+        gt_pose_stamped.pose.orientation.z = gt_quat_array[2]
+        gt_pose_stamped.pose.orientation.w = gt_quat_array[3]
+        gt_path.poses.append(gt_pose_stamped)
 
-        # clear the previous plot
-        ax.clear()
+        # publish the ground truth path message
+        gt_path_pub.publish(gt_path)
 
-        # plot the new trajectory
-        ax.plot(estimated_pos[:, 0], estimated_pos[:, 1])
+        # add the estimated pose to the estimated path
+        est_pose_stamped = PoseStamped()
+        est_pose_stamped.header.stamp = rospy.Time.from_sec(t.to_sec())
+        est_pose_stamped.header.frame_id = 'map'
+        est_pose_stamped.pose.position.x = cumulative_est_tf_mat[0, 3]
+        est_pose_stamped.pose.position.y = cumulative_est_tf_mat[1, 3]
+        est_pose_stamped.pose.position.z = cumulative_est_tf_mat[2, 3]
+        est_quat_array = tf_trans.quaternion_from_matrix(cumulative_est_tf_mat)
+        est_pose_stamped.pose.orientation.x = est_quat_array[0]
+        est_pose_stamped.pose.orientation.y = est_quat_array[1]
+        est_pose_stamped.pose.orientation.z = est_quat_array[2]
+        est_pose_stamped.pose.orientation.w = est_quat_array[3]
+        est_path.poses.append(est_pose_stamped)
 
-        # set the plot limits dynamically
-        ax.set_xlim([estimated_pos[:, 0].min() - 1, estimated_pos[:, 0].max() + 1])
-        ax.set_ylim([estimated_pos[:, 1].min() - 1, estimated_pos[:, 1].max() + 1])
+        # publish the estimated path message
+        est_path_pub.publish(est_path)
 
-        # draw the plot
-        plt.draw()
-
-        # pause before updating plot
-        plt.pause(0.0001)
-
-# save the final plot
-plt.savefig('trajectory.png')
+    # update the previous image, timestamp and pose
+    prev_img = cur_img
+    prev_tf_mat = cur_tf_mat
+    prev_translation = cur_translation
