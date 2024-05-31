@@ -40,7 +40,7 @@ class BotanicGarden(Dataset):
         return mkpts0, mkpts1, mconf, tf_mat
 
 class PoseEstimationModel(nn.Module):
-    def __init__(self, d_model=32, nhead=1, num_layers=1, dropout=0.3):
+    def __init__(self, d_model=512, nhead=8, num_layers=6, dropout=0.1):
         super(PoseEstimationModel, self).__init__()
         self.embedding = nn.Linear(5, d_model)
         self.transformer = nn.TransformerEncoder(
@@ -63,7 +63,7 @@ class PoseEstimationModel(nn.Module):
     
 def train():
     model = PoseEstimationModel().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5, weight_decay=1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
     criterion = nn.MSELoss()
 
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -90,10 +90,10 @@ def train():
     val_set = BotanicGarden(val_data_dir)
 
     # create training and validation dataloaders
-    train_dataloader = DataLoader(train_set, batch_size=1, shuffle=False, collate_fn=collate)
-    val_dataloader = DataLoader(val_set, batch_size=1, shuffle=False, collate_fn=collate)
+    train_dataloader = DataLoader(train_set, batch_size=32, shuffle=True, collate_fn=collate)
+    val_dataloader = DataLoader(val_set, batch_size=32, shuffle=False, collate_fn=collate)
 
-    num_epochs = 10
+    num_epochs = 30
     for epoch in range(num_epochs):
         # training phase
         model.train()
