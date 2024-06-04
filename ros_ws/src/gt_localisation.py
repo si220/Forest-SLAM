@@ -24,7 +24,7 @@ gt_path_pub = rospy.Publisher('gt_trajectory', Path, queue_size=10)
 gt_path = Path()
 gt_path.header.frame_id = 'map'
 
-bag = rosbag.Bag('Datasets/BotanicGarden/1005_00_img10hz600p.bag')
+bag = rosbag.Bag('Datasets/BotanicGarden/1018_13_img10hz600p.bag')
 
 # extrinsic params for the transformation from RGB0 to VLP16 coordinate frame
 T_rgb0_vlp16 = np.array([[0.0238743541600432, -0.999707744440396, 0.00360642510766516, 0.138922870923538],
@@ -107,12 +107,12 @@ for index, (topic, msg, t) in enumerate(bag.read_messages(topics=['/dalsa_rgb/le
     prev_tf_mat = cur_tf_mat
     prev_translation = cur_translation
 
-results_dir = 'Datasets/BotanicGarden/1005_00/pose_estimation_results/'
+results_dir = 'Datasets/BotanicGarden/1018_13/pose_estimation_results/'
 
 # create new results folder
 if not os.path.exists(results_dir):
     os.mkdir(results_dir)
 
 # save the data to the files
-gt_cumulative_poses_file = os.path.join(results_dir, '1005_00_gt.txt')
+gt_cumulative_poses_file = os.path.join(results_dir, '1018_13_Ground_Truth.txt')
 np.savetxt(gt_cumulative_poses_file, gt_poses_tum, delimiter=' ', fmt='%f')
