@@ -34,7 +34,7 @@ pcd = o3d.geometry.PointCloud()
 est_path = Path()
 est_path.header.frame_id = 'map'
 
-bag = rosbag.Bag('Datasets/BotanicGarden/1018_13_img10hz600p.bag')
+bag = rosbag.Bag('Datasets/BotanicGarden/1018_00_img10hz600p.bag')
 
 # camera intrinsic params from the given projection parameters
 K0 = K1 = np.array([[642.9165664800531, 0., 460.1840658156501],
@@ -75,7 +75,8 @@ cumulative_est_tf_mat = np.eye(4)
 # initialise lists to store estimated poses in TUM format
 est_poses_tum = []
 
-frame_interval = 10
+# set frame interval for feature matching
+frame_interval = 1
 
 # initialise latest point cloud message
 latest_point_cloud_msg = None
@@ -136,62 +137,60 @@ for index, (topic, msg, t) in enumerate(bag.read_messages(topics=['/dalsa_rgb/le
 
             est_poses_tum.append([t.to_sec(), cumulative_est_tf_mat[0, 3], cumulative_est_tf_mat[1, 3], cumulative_est_tf_mat[2, 3],
                                     est_quat_array[0], est_quat_array[1], est_quat_array[2], est_quat_array[3]])
-            
+
+            # process the latest point cloud message if it exists
+            if latest_point_cloud_msg is not None:
+                ################################# MAPPING #################################
+                point_cloud = pc2.read_points(latest_point_cloud_msg, skip_nans=True, field_names=('x', 'y', 'z'))
+                points = np.array(list(point_cloud))
+
+                # transform the points using the ground truth pose
+                points = np.dot(cumulative_est_tf_mat, np.vstack((points.T, np.ones(points.shape[0]))))[:3, :].T
+
+                # create a point cloud object
+                pcd_temp = o3d.geometry.PointCloud()
+                pcd_temp.points = o3d.utility.Vector3dVector(points)
+
+                # downsample the point cloud
+                pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.5)
+
+                # if pcd is empty, this is the first point cloud
+                if not pcd.has_points():
+                    pcd.points = pcd_temp.points
+                else:
+                    # add the transformed points to the overall map
+                    pcd.points = o3d.utility.Vector3dVector(
+                        np.concatenate((np.asarray(pcd.points), np.asarray(pcd_temp.points)))
+                    )
+
+                # create a header for the point cloud message
+                header = Header()
+                header.stamp = rospy.Time.now()
+                header.frame_id = 'map'
+
+                # convert the open3d point cloud to a ROS PointCloud2 message
+                pc2_msg = pc2.create_cloud_xyz32(header, np.asarray(pcd.points))
+
+                # publish the point cloud message
+                map_pub.publish(pc2_msg)
+                print(f'map updated')
+
+                # reset the latest point cloud message
+                latest_point_cloud_msg = None
+
         # update the previous image
         prev_img = cur_img
 
-    #             # process the latest point cloud message if it exists
-    #             if latest_point_cloud_msg is not None:
-    #                 ################################# MAPPING #################################
-    #                 point_cloud = pc2.read_points(latest_point_cloud_msg, skip_nans=True, field_names=('x', 'y', 'z'))
-    #                 points = np.array(list(point_cloud))
+    elif topic == '/velodyne_points':
+        latest_point_cloud_msg = msg
 
-    #                 # transform the points using the ground truth pose
-    #                 points = np.dot(cumulative_est_tf_mat, np.vstack((points.T, np.ones(points.shape[0]))))[:3, :].T
+# uncomment the following to save the estimated and ground truth poses
+# results_dir = 'Datasets/BotanicGarden/1018_00/pose_estimation_results/'
 
-    #                 # create a point cloud object
-    #                 pcd_temp = o3d.geometry.PointCloud()
-    #                 pcd_temp.points = o3d.utility.Vector3dVector(points)
+# # create new results folder
+# if not os.path.exists(results_dir):
+#     os.mkdir(results_dir)
 
-    #                 # downsample the point cloud
-    #                 pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.5)
-
-    #                 # if pcd is empty, this is the first point cloud
-    #                 if not pcd.has_points():
-    #                     pcd.points = pcd_temp.points
-    #                 else:
-    #                     # add the transformed points to the overall map
-    #                     pcd.points = o3d.utility.Vector3dVector(
-    #                         np.concatenate((np.asarray(pcd.points), np.asarray(pcd_temp.points)))
-    #                     )
-
-    #                 # create a header for the point cloud message
-    #                 header = Header()
-    #                 header.stamp = rospy.Time.now()
-    #                 header.frame_id = 'map'
-
-    #                 # convert the open3d point cloud to a ROS PointCloud2 message
-    #                 pc2_msg = pc2.create_cloud_xyz32(header, np.asarray(pcd.points))
-
-    #                 # publish the point cloud message
-    #                 map_pub.publish(pc2_msg)
-    #                 print(f'map updated')
-
-    #                 # reset the latest point cloud message
-    #                 latest_point_cloud_msg = None
-
-    #         # update the previous image
-    #         prev_img = cur_img
-
-    # elif topic == '/velodyne_points':
-    #     latest_point_cloud_msg = msg
-
-results_dir = 'Datasets/BotanicGarden/1018_13/pose_estimation_results/'
-
-# create new results folder
-if not os.path.exists(results_dir):
-    os.mkdir(results_dir)
-
-# save the data to the files
-est_cumulative_poses_file = os.path.join(results_dir, 'SuperPoint_SuperGlue_Mono.txt')
-np.savetxt(est_cumulative_poses_file, est_poses_tum, delimiter=' ', fmt='%f')
+# # save the data to the files
+# est_cumulative_poses_file = os.path.join(results_dir, 'SuperPoint_SuperGlue_Mono.txt')
+# np.savetxt(est_cumulative_poses_file, est_poses_tum, delimiter=' ', fmt='%f')
