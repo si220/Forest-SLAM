@@ -1,0 +1,32 @@
+# RViz configuration file
+
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Displays
+        - /Global Options
+        - /Global Options/Fixed Frame
+      Splitter Ratio: 0.5
+    Tree:
+      - Class: rviz/Grid
+        Enabled: true
+        Name: Grid
+        Value: 
+      - Class: rviz/Path
+        Enabled: true
+        Name: Estimated Path
+        Topic: /est_trajectory
+        Value: 
+      - Class: rviz/PointCloud2
+        Enabled: true
+        Name: SLAM Map
+        Topic: /slam_map
+        Value: 
+    Window Geometry: 
+      Height: 1050
+      Width: 1680
+      X: 0
+      Y: 0
+

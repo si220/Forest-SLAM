@@ -1,4 +1,4 @@
-FROM nvidia/opengl:1.2-glvnd-runtime-ubuntu20.04
+FROM nvidia/cuda:12.3.2-runtime-ubuntu20.04
 
 RUN apt-get update
 
@@ -72,6 +72,16 @@ RUN cd /tmp && git clone https://github.com/stevenlovegrove/Pangolin && \
     cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-std=c++11 .. && \
     make -j3 && make install && \
     cd / && rm -rf /tmp/Pangolin
+
+RUN apt-get install -y \
+    libgl1-mesa-glx \
+    libgl1-mesa-dri
+
+RUN pip3 install torch torchvision torchaudio
+RUN pip3 install scipy
+RUN pip3 install matplotlib
+RUN pip3 install open3d
+RUN pip3 install evo
 
 ENV ROS_DISTRO noetic
 ENV LANG en_US.UTF-8

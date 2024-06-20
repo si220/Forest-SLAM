@@ -1,0 +1,7 @@
+<launch>
+    <!-- run the SLAM visualiser node -->
+    <node name="forest_slam_stereo" pkg="forest_slam_ros" type="stereo_slam.py" output="screen" />
+
+    <!-- launch RViz -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find forest_slam_ros)/rviz/forest_slam_stereo.rviz" />
+</launch>
