@@ -1,5 +1,6 @@
-# Forest-SLAM
+# Forest SLAM
 This repository contains the software archive for my final year project undertaken during my MEng Electronic and Information Engineering degree at Imperial College London during the 2023-24 academic year.  
+  
 My master's thesis is titled 'Enhancing Visual SLAM for Autonomous Forest Navigation through Robust Feature Correspondence'
 
 ## Installation
@@ -29,6 +30,10 @@ The source code can be found in [ros_ws/src/](/home/si220/source/repos/Forest-SL
 
 ## Usage
 Users can either manually run the individual files or use the ROS package directly.  
+
+Modify the file you want to run with the correct folder location for the rosbag you want to use, eg:  
+
+`~/ros_ws/src/Datasets/BotanicGarden/1018_00/1018_00_img10hz600p.bag`
 
 Here is an example of how to manually run a specific file:  
 1) Open three terminals using `make exec`
